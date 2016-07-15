@@ -21,8 +21,7 @@ object MovingAverage extends Scaffolding {
     //to store offsets in external db
     val kafkaParams: Map[String, String] = Map[String, String]("metadata.broker.list" -> broker, "zookeeper.connect" -> zookeper)
 
-    //to store offsets in zookeeper db
-    //periodically commits offset in the zookeper
+    //to store offsets in zookeeper db and periodically commits offset in the zookeper
     val kafkaParams0: Map[String, String] = Map[String, String](
       "client.id" -> clientId,
       "group.id" -> "spark-cluster",
@@ -37,18 +36,7 @@ object MovingAverage extends Scaffolding {
     val ssc = new StreamingContext(sc, Seconds(streamingIntervalSec))
     ssc.checkpoint(chDir)
 
-    /*
-    Api as if offset is stored in the zookeper and uses spark check-point
-    val src: ReceiverInputDStream[(String, String)] =
-      KafkaUtils.createStream[String, String, StringDecoder, StringDecoder](ssc, kafkaParams, topics, StorageLevel.MEMORY_AND_DISK)
-
-    val src = src0.map { line ⇒
-      val obj = line._2.parseJson.convertTo[Reading]
-      (obj.deviceId, (obj.current, 1l))
-    }
-    */
-
-    //Api as if offset is stored in a external db, cassandra in our case
+    //We store offsets in cassandra
     val directKafkaStream = KafkaUtils.createDirectStream[String, String, StringDecoder, StringDecoder, (String, (Double, Long))](
       ssc, kafkaParams, offsets,
       (mmd: MessageAndMetadata[String, String]) => {
