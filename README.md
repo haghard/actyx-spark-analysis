@@ -37,7 +37,7 @@ readings - kafka topic name
 
 192.168.0.38:9092 - kafka broker address 
 
-15 - slideDuration in seconds (spark terminology)
+15 - slideDuration in seconds (spark streaming terminology)
  
-4 - number of slideDuration in the single windowDuration (spark terminology) 
+4 - number of slideDuration in the single windowDuration (spark streaming terminology) 
 
