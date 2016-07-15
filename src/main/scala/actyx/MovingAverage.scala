@@ -105,7 +105,7 @@ object MovingAverage extends Scaffolding {
 
   def main(args: Array[String]): Unit = {
     if (args.length != 7) {
-      System.err.println(s"Found: $args with length ${args.length} Expected: <clientId> <topic> <numOfPartitions> <zookeper> <broker> <streamingInterval> <windowSize> <parallelism>")
+      System.err.println(s"Found: $args with length ${args.length} Expected: <clientId> <topic> <numOfPartitions> <zookeper> <broker> <streamingInterval> <windowSize>")
       System.exit(-1)
     } else {
       val clientId = args(0)
