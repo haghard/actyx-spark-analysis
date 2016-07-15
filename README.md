@@ -31,7 +31,7 @@ client1 - client.id for zookeeper
 
 readings - kafka topic name
 
-4 - number of partitions  
+4 - the number of kafka topic partitions  
 
 192.168.0.182:2181 - zookeper address
 
