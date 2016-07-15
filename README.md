@@ -1,6 +1,6 @@
 # actyx-spark-analysis
 
-A implementation of moving average alg for spark. This job reads data from kafka's topic, evaluate moving average aggregates and writes them into cassandra. The main downside being is that we can use this job only if a difference between an arrival and a processing time of an event very small. 
+An implementation of moving average alg for spark. This job reads data from kafka's topic, evaluate moving average aggregates and writes them into cassandra. The main downside being is that we can use this job only if a difference between an arrival and a processing time of an event very small. 
 
 
 #How to build
