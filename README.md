@@ -9,7 +9,7 @@ An implementation of moving average alg for spark. This spark-streaming job read
 
 It will create target/scala-2.11/moving-average.jar
 
-#How to run on spark cluster
+#How to run on Spark standalone cluster
 
 To run this spark streaming job you need to have Kafka, Cassandra and Spark cluster
 
