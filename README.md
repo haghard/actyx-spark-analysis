@@ -2,7 +2,6 @@
 
 An implementation of moving average alg for spark. This spark-streaming job reads data from kafka topic, evaluates moving average aggregates and writes them into cassandra. The main downside being is that we can use this job only if a difference between an arrival and a processing time of an event very small(Within a single DC). 
 
-
 #How to build
 
 > sbt assembly
@@ -41,3 +40,10 @@ readings - kafka topic name
  
 4 - number of slideDuration in the single windowDuration (spark-streaming terminology) 
 
+
+### Links ###
+https://www.youtube.com/watch?v=fXnNEq1v3VA
+http://koeninger.github.io/kafka-exactly-once/#1
+http://koeninger.github.io/spark-cassandra-example/#1
+https://github.com/koeninger/kafka-exactly-once
+https://www.youtube.com/watch?v=p5U9rTFYq0c&list=PLm-EPIkBI3YoiA-02vufoEj4CgYvIQgIk&index=23

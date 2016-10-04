@@ -10,6 +10,20 @@ import org.apache.spark.streaming.kafka.{HasOffsetRanges, KafkaUtils, OffsetRang
 import spray.json._
 import com.datastax.spark.connector.cql.{CassandraConnector, CassandraConnectorConf}
 
+
+/**
+
+  bin/spark-submit --packages org.apache.spark:spark-streaming-kafka_2.11:1.6.1,datastax:spark-cassandra-connector:1.6.0-s_2.11 \
+   --master spark://192.168.0.182:7077 \
+   --conf spark.cassandra.connection.host=192.168.0.182,192.168.0.38 \
+   --conf spark.cassandra.output.consistency.level=LOCAL_QUORUM \
+   --total-executor-cores 4 \
+   --executor-memory 1024MB \
+   --class actyx.MovingAverage \
+   ../moving-average.jar \
+   client1 readings 4 192.168.0.182:2181 192.168.0.38:9092 15 4
+
+ */
 object MovingAverage extends Scaffolding {
 
   def setupSsc(conf: SparkConf, clientId: String, topic: String,
@@ -66,21 +80,26 @@ object MovingAverage extends Scaffolding {
       println(s"Number of spark partitions after windowing: ${rdd.partitions.size}")
 
       rdd.foreachPartition { iter =>
+        //Runs on a worker
         val pId = TaskContext.get.partitionId
         //println("read offset ranges on the executor\n" + offsetRanges.mkString("\n"))
         val range = offsetRanges(pId)
+        val host = java.net.InetAddress.getLocalHost
 
-        //save results
+        //If you want finer grained control you must store offsets somewhere (Cassandra)
+
+        //At least once
+        //Stage 1 - save results
         val now = ZonedDateTime.now(ZoneOffset.UTC)
         iter.foreach { r =>
           val value: java.lang.Double = if(r._2._2 > 0l) r._2._1 / r._2._2 else 0.0
           cc.withSessionDo {
             _.execute(s"INSERT INTO ${keySpace}.${maTable}(device_id, time_bucket, source, when, value) values (?,?,?,?,?)",
-              r._1, (timeBucketFormatter format now), s"$sourceName-$pId", java.util.Date.from(now.toInstant), value)
+              r._1, (timeBucketFormatter format now), s"$sourceName-${host}-$pId", java.util.Date.from(now.toInstant), value)
           }
         }
 
-        //save the most recent offset
+        //Stage 2 - save the most recent offset
         cc.withSessionDo { s =>
           s.execute(s"UPDATE ${keySpace}.${offsetsTable} SET offset = ? where topic = ? and partition = ?",
             range.untilOffset: java.lang.Long, topic, pId: java.lang.Integer)
@@ -91,6 +110,13 @@ object MovingAverage extends Scaffolding {
     ssc
   }
 
+  /**
+   * If the job fails and restarts at something other than the highest offset,
+   * the first window after restart will include all messages received while your job was down,
+   * not just N seconds worth of messages. It's a mess.
+   * We accept that our first window will be wrong.
+   *
+   */
   def main(args: Array[String]): Unit = {
     if (args.length != 7) {
       System.err.println(s"Found: $args with length ${args.length} Expected: <clientId> <topic> <numOfPartitions> <zookeper> <broker> <streamingInterval> <windowSize>")
@@ -120,6 +146,19 @@ object MovingAverage extends Scaffolding {
 
       cc.withSessionDo { session =>
         session.execute(
+          s"""
+            |CREATE KEYSPACE IF NOT EXISTS $keySpace WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 2 };
+          """.stripMargin)
+
+        /**
+                                    +--------------------------+------------------+--------------------------+-----------------
+                                    |2016-01-01:01:01:26:source|..-01:01:01:26:...|2016-01-01:01:01:29:source|..-01:01:01:29:..
+            +-----------------------+--------------------------+------------------+--------------------------+-----------------
+            |324234-34523:2016-01-01|                          |                  |                          |
+            +-----------------------+--------------------------+------------------+--------------------------+-----------------
+
+        */
+        session.execute(
           s"""CREATE TABLE IF NOT EXISTS ${keySpace}.${maTable} (
               | device_id varchar,
               | time_bucket varchar,
@@ -129,11 +168,27 @@ object MovingAverage extends Scaffolding {
               | value double,
               | PRIMARY KEY ((device_id, time_bucket), when)) WITH CLUSTERING ORDER BY (when DESC);""".stripMargin)
 
+
+        /**
+
+                       +------+------+------+--
+                       |offset|offset|offset|
+            +----------+------+------+------+--
+            |readings:1| 135  | 245  |  442 |
+            +----------+------+------+------+--
+
+                       +------+------+------+--
+                       |offset|offset|offset|
+            +----------+------+------+------+--
+            |readings:2| 132  | 275  |  472 |
+            +----------+------+------+------+--
+        *
+        */
         session.execute(
           s"""CREATE TABLE IF NOT EXISTS ${keySpace}.${offsetsTable} (
               | topic varchar,
               | partition int,
-              | offset bigint,
+              | static offset bigint,
               | PRIMARY KEY ((topic, partition)));""".stripMargin)
 
         (0 until numOfPartitions).foreach { n =>
