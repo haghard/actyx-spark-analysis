@@ -1,4 +1,4 @@
-package actyx
+package analytics
 
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
@@ -6,7 +6,7 @@ import com.datastax.spark.connector.SomeColumns
 import spray.json._
 
 trait Scaffolding {
-  val keySpace = "actyx"
+  val keySpace = "analytics"
   val maTable = "moving_average"
   val offsetsTable = "kafka_offsets"
 

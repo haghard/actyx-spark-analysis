@@ -1,4 +1,4 @@
-# actyx-spark-analysis
+# kafka-spark-moving-average
 
 An implementation of moving average alg for spark. This spark-streaming job reads data from kafka topic, evaluates moving average aggregates and writes them into cassandra. The main downside being is that we can use this job only if a difference between an arrival and a processing time of an event very small(Within a single DC). 
 
@@ -18,7 +18,7 @@ To run this spark streaming job you need to have Kafka, Cassandra and Spark clus
   --conf spark.cassandra.output.consistency.level=LOCAL_QUORUM \  
   --total-executor-cores 4 \  
   --executor-memory 1024MB \  
-  --class actyx.MovingAverage \  
+  --class analytics.MovingAverage \  
   ../moving-average.jar \  
   client1 readings 4 192.168.0.182:2181 192.168.0.38:9092 15 4
 

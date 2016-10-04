@@ -1,4 +1,4 @@
-package actyx
+package analytics
 
 import kafka.serializer.StringDecoder
 import kafka.common.TopicAndPartition
@@ -19,7 +19,7 @@ import com.datastax.spark.connector.cql.{CassandraConnector, CassandraConnectorC
    --conf spark.cassandra.output.consistency.level=LOCAL_QUORUM \
    --total-executor-cores 4 \
    --executor-memory 1024MB \
-   --class actyx.MovingAverage \
+   --class analytics.MovingAverage \
    ../moving-average.jar \
    client1 readings 4 192.168.0.182:2181 192.168.0.38:9092 15 4
 
@@ -151,25 +151,13 @@ object MovingAverage extends Scaffolding {
           """.stripMargin)
 
         /**
+         *
                                     +--------------------------+------------------+--------------------------+-----------------
                                     |2016-01-01:01:01:26:source|..-01:01:01:26:...|2016-01-01:01:01:29:source|..-01:01:01:29:..
             +-----------------------+--------------------------+------------------+--------------------------+-----------------
             |324234-34523:2016-01-01|                          |                  |                          |
             +-----------------------+--------------------------+------------------+--------------------------+-----------------
 
-        */
-        session.execute(
-          s"""CREATE TABLE IF NOT EXISTS ${keySpace}.${maTable} (
-              | device_id varchar,
-              | time_bucket varchar,
-              | source varchar,
-              | when timestamp,
-              | startOffset bigint,
-              | value double,
-              | PRIMARY KEY ((device_id, time_bucket), when)) WITH CLUSTERING ORDER BY (when DESC);""".stripMargin)
-
-
-        /**
 
                        +------+------+------+--
                        |offset|offset|offset|
@@ -182,8 +170,18 @@ object MovingAverage extends Scaffolding {
             +----------+------+------+------+--
             |readings:2| 132  | 275  |  472 |
             +----------+------+------+------+--
-        *
+
         */
+        session.execute(
+          s"""CREATE TABLE IF NOT EXISTS ${keySpace}.${maTable} (
+              | device_id varchar,
+              | time_bucket varchar,
+              | source varchar,
+              | when timestamp,
+              | startOffset bigint,
+              | value double,
+              | PRIMARY KEY ((device_id, time_bucket), when)) WITH CLUSTERING ORDER BY (when DESC);""".stripMargin)
+
         session.execute(
           s"""CREATE TABLE IF NOT EXISTS ${keySpace}.${offsetsTable} (
               | topic varchar,

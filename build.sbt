@@ -2,7 +2,7 @@ import sbt._
 
 name := "actyx-spark"
 
-organization := "actyx"
+organization := "analytics"
 
 version := "0.0.1"
 
@@ -42,6 +42,6 @@ libraryDependencies ++= Seq(
 
 autoAPIMappings := true
 
-mainClass in Compile := Some("actyx.MovingAverage")
+mainClass in Compile := Some("analytics.MovingAverage")
 
 assemblyJarName in assembly := "moving-average.jar"
