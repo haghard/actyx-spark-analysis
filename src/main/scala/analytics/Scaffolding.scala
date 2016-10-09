@@ -2,20 +2,59 @@ package analytics
 
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
-import com.datastax.spark.connector.SomeColumns
 import spray.json._
 
 trait Scaffolding {
-  val keySpace = "analytics"
-  val maTable = "moving_average"
-  val offsetsTable = "kafka_offsets"
+  /**
 
-  val sourceName = "spark-streaming-job"
+                                      +--------------------------+------------------+--------------------------+-----------------
+                                      |2016-01-01:01:01:26:source|..-01:01:01:26:...|2016-01-01:01:01:29:source|..-01:01:01:29:..
+              +-----------------------+--------------------------+------------------+--------------------------+-----------------
+              |324234-34523:2016-01-01|                          |                  |                          |
+              +-----------------------+--------------------------+------------------+--------------------------+-----------------
+
+
+                         +------+------+------+--
+                         |offset|offset|offset|
+              +----------+------+------+------+--
+              |readings:1| 135  | 245  |  442 |
+              +----------+------+------+------+--
+
+                         +------+------+------+--
+                         |offset|offset|offset|
+              +----------+------+------+------+--
+              |readings:2| 132  | 275  |  472 |
+              +----------+------+------+------+--
+
+  */
+
+  val keySpace = "aggregates"
+
+  val maTable = "moving_average"
+  val createMaTable = s"""CREATE TABLE IF NOT EXISTS ${keySpace}.${maTable} (
+                | device_id varchar,
+                | time_bucket varchar,
+                | source varchar,
+                | when timestamp,
+                | startOffset bigint,
+                | endOffset bigint,
+                | value double,
+                | PRIMARY KEY ((device_id, time_bucket), when)) WITH CLUSTERING ORDER BY (when DESC);""".stripMargin
+
+
+  val offsetsTable = "kafka_offsets"
+  val createOffsetsTable = s"""CREATE TABLE IF NOT EXISTS ${keySpace}.${offsetsTable} (
+                | topic varchar,
+                | partition int,
+                | offset bigint,
+                | PRIMARY KEY ((topic, partition)));""".stripMargin
+
+  val InsertOffset = s"UPDATE ${keySpace}.${offsetsTable} SET offset = ? where topic = ? and partition = ?"
+  val InsertReading = s"INSERT INTO ${keySpace}.${maTable}(device_id, time_bucket, source, when, startOffset, endOffset, value) values (?,?,?,?,?,?,?)"
 
   val chDir = "checkpoint-ma"
 
   val timeBucketFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd")
-  val columns = SomeColumns("device_id", "time_bucket", "source", "when", "value")
 
   def murmur2Partitioner(kafkaNumPartitions: Int) = new org.apache.spark.Partitioner {
 

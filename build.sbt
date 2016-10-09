@@ -30,6 +30,7 @@ resolvers ++= Seq(
 )
 
 val sparkDependencyScope = "provided"
+val cassandraDriver = "3.0.1"
 
 libraryDependencies ++= Seq(
   "io.spray"                %% "spray-json"                % "1.3.2",
@@ -38,6 +39,9 @@ libraryDependencies ++= Seq(
   "org.apache.spark"        %% "spark-streaming"           % sparkVersion      % sparkDependencyScope,
   "org.apache.spark"        %% "spark-streaming-kafka"     % sparkVersion      % sparkDependencyScope,
   "com.datastax.spark"      %% "spark-cassandra-connector" % "1.6.0"           % sparkDependencyScope
+  //"com.datastax.cassandra"  %  "cassandra-driver-mapping"  % "3.0.1",
+  //"io.dropwizard.metrics"   %  "metrics-core"              % "3.1.0",
+  //"io.dropwizard.metrics"   %  "metrics-graphite"          % "3.1.0"
 )
 
 autoAPIMappings := true

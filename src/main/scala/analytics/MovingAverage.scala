@@ -1,36 +1,62 @@
 package analytics
 
-import kafka.serializer.StringDecoder
+import java.net.{InetAddress, InetSocketAddress}
+
+import com.datastax.driver.core.BatchStatement.Type
+
+import scala.annotation.tailrec
+import scala.util.{Failure, Success, Try}
+
+//import com.codahale.metrics.{MetricRegistry, MetricFilter}
+//import com.codahale.metrics.graphite.{Graphite, GraphiteReporter}
+import java.time.{ZoneOffset, ZonedDateTime}
+
+import com.datastax.driver.core.exceptions.WriteTimeoutException
+import com.datastax.driver.core.{ BatchStatement, ConsistencyLevel, WriteType}
+import com.datastax.spark.connector.cql.{CassandraConnector, CassandraConnectorConf}
 import kafka.common.TopicAndPartition
 import kafka.message.MessageAndMetadata
-import java.time.{ZoneOffset, ZonedDateTime}
+import kafka.serializer.StringDecoder
+import org.apache.spark.streaming.kafka.{HasOffsetRanges, KafkaUtils, OffsetRange}
 import org.apache.spark.streaming.{Seconds, StreamingContext}
 import org.apache.spark.{SparkConf, SparkContext, TaskContext}
-import org.apache.spark.streaming.kafka.{HasOffsetRanges, KafkaUtils, OffsetRange}
 import spray.json._
-import com.datastax.spark.connector.cql.{CassandraConnector, CassandraConnectorConf}
 
 
 /**
 
-  bin/spark-submit --packages org.apache.spark:spark-streaming-kafka_2.11:1.6.1,datastax:spark-cassandra-connector:1.6.0-s_2.11 \
-   --master spark://192.168.0.182:7077 \
-   --conf spark.cassandra.connection.host=192.168.0.182,192.168.0.38 \
-   --conf spark.cassandra.output.consistency.level=LOCAL_QUORUM \
-   --total-executor-cores 4 \
-   --executor-memory 1024MB \
-   --class analytics.MovingAverage \
-   ../moving-average.jar \
-   client1 readings 4 192.168.0.182:2181 192.168.0.38:9092 15 4
+  scp target/scala-2.11/moving-average.jar haghard@192.168.0.182:/home/haghard/Projects
+
+ bin/spark-submit --packages org.apache.spark:spark-streaming-kafka_2.11:1.6.1,datastax:spark-cassandra-connector:1.6.0-s_2.11 \
+  --master spark://192.168.0.182:7077 \
+  --conf spark.cassandra.connection.host=192.168.0.182,192.168.0.38 \
+  --conf spark.cassandra.output.consistency.level=LOCAL_QUORUM \
+  --total-executor-cores 4 \
+  --executor-memory 1024MB \
+  --class analytics.MovingAverage \
+  ../moving-average.jar \
+  client1 readings 4 192.168.0.148:2181 192.168.0.148:9092 35 4 192.168.0.182 8125
 
  */
 object MovingAverage extends Scaffolding {
 
-  def setupSsc(conf: SparkConf, clientId: String, topic: String,
-               kafkaNumPartitions: Int, zookeper: String, broker: String,
-               streamingIntervalSec: Int, windowSize: Int,
-               cc: CassandraConnector,
-               offsets: Map[TopicAndPartition, Long]): StreamingContext = {
+  case class CommitFailed(msg: String, cause: WriteTimeoutException) extends Exception(msg)
+
+  /*def graphiteReporter(metricRegistry: MetricRegistry, pId: Int, host: InetAddress): Unit /*GraphiteReporter*/ = {
+    //val addr = new InetSocketAddress(InetAddress.getByName("192.168.0.182"), 8125)
+    val graphite = new Graphite(new InetSocketAddress("192.168.0.182", 2003))
+      val reporter = GraphiteReporter.forRegistry(metricRegistry)
+        .prefixedWith(s"moving-avg-$pId")
+        .convertRatesTo(TimeUnit.SECONDS)
+        .convertDurationsTo(TimeUnit.MILLISECONDS)
+        .filter(MetricFilter.ALL)
+        .build(graphite)
+      reporter.start(20, TimeUnit.SECONDS)
+  }*/
+
+  def setupSsc(conf: SparkConf, clientId: String, topic: String, kafkaNumPartitions: Int, zookeper: String, broker: String,
+    streamingIntervalSec: Int, windowSize: Int, graphiteHost: String, graphitePort: Int, /*g: GraphiteUDP,*/
+    cc: CassandraConnector, offsets: Map[TopicAndPartition, Long]): StreamingContext = {
 
     //to store offsets in external db
     val kafkaParams: Map[String, String] = Map[String, String]("metadata.broker.list" -> broker, "zookeeper.connect" -> zookeper)
@@ -73,42 +99,79 @@ object MovingAverage extends Scaffolding {
       partitioner = murmur2Partitioner(kafkaNumPartitions),
       filterFunc = null)
 
-    //window.mapPartitions { it =>}
-
     window.foreachRDD { rdd =>
       println(s"Partitioner: ${rdd.partitioner}")
       println(s"Number of spark partitions after windowing: ${rdd.partitions.size}")
-
       rdd.foreachPartition { iter =>
         //Runs on a worker
+
+        val graphite = new GraphiteUDP {
+          override val address = new InetSocketAddress(InetAddress.getByName(graphiteHost), graphitePort)
+        }
+
         val pId = TaskContext.get.partitionId
         //println("read offset ranges on the executor\n" + offsetRanges.mkString("\n"))
         val range = offsetRanges(pId)
         val host = java.net.InetAddress.getLocalHost
 
-        //If you want finer grained control you must store offsets somewhere (Cassandra)
 
-        //At least once
-        //Stage 1 - save results
-        val now = ZonedDateTime.now(ZoneOffset.UTC)
-        iter.foreach { r =>
-          val value: java.lang.Double = if(r._2._2 > 0l) r._2._1 / r._2._2 else 0.0
-          cc.withSessionDo {
-            _.execute(s"INSERT INTO ${keySpace}.${maTable}(device_id, time_bucket, source, when, value) values (?,?,?,?,?)",
-              r._1, (timeBucketFormatter format now), s"$sourceName-${host}-$pId", java.util.Date.from(now.toInstant), value)
-          }
-        }
+        //http://christopher-batey.blogspot.ru/2015/03/cassandra-anti-pattern-cassandra-logged.html
+        //I want finer grained control, so I must store offsets anywhere else (Cassandra)
+        //I can decide to make sure that both statements succeed
+        //(Atomicity)Logged batches are used to ensure that all the statements will eventually succeed.
 
-        //Stage 2 - save the most recent offset
+        //Bad: Batch span 2 tables and several partitions to ensure that all the statements will eventually succeed (we need atomicity)
+        val stmt = new BatchStatement(Type.LOGGED)
+        stmt.setConsistencyLevel(ConsistencyLevel.LOCAL_QUORUM)
+        stmt.setSerialConsistencyLevel(ConsistencyLevel.LOCAL_SERIAL)
+
         cc.withSessionDo { s =>
-          s.execute(s"UPDATE ${keySpace}.${offsetsTable} SET offset = ? where topic = ? and partition = ?",
-            range.untilOffset: java.lang.Long, topic, pId: java.lang.Integer)
+          val now = ZonedDateTime.now(ZoneOffset.UTC)
+          //graphiteReporter(s.getCluster.getMetrics.getRegistry, pId, host)
+
+          val offsetStmt = s.prepare(InsertOffset)
+          val readingStatement = s.prepare(InsertReading)
+
+          var batch = stmt.add(offsetStmt.bind(range.untilOffset: java.lang.Long, topic, pId: java.lang.Integer))
+          var buffer = Vector[String]()
+          iter.foreach { case (id, (sum, count)) =>
+            val value: java.lang.Double = if (count > 0l) sum / count else 0.0
+            buffer = buffer :+ s"${pId}_${host}:1|c"
+            batch = batch.add(readingStatement.bind(id, (timeBucketFormatter format now), s"${maTable}-${host}-$pId",
+              java.util.Date.from(now.toInstant), range.fromOffset: java.lang.Long, range.untilOffset: java.lang.Long, value))
+          }
+
+          //This write consist of 2 operations
+          //1.Writing to the batch log
+          //2.Applying the actual statements
+
+          executeWithRetry(5) {
+            s.execute(batch)
+            buffer.foreach(graphite.send(_))
+          }
         }
       }
     }
-
     ssc
   }
+
+  def executeWithRetry[T](n: Int)(f: ⇒ T) = retryCassandraWrite(n)(f)
+
+    @tailrec private def retryCassandraWrite[T](n: Int)(action: ⇒ T): T =
+      Try(action) match {
+        case Success(x) ⇒ x
+        case Failure(e) ⇒
+          if(e.isInstanceOf[WriteTimeoutException] && n > 1) {
+            val ex = e.asInstanceOf[WriteTimeoutException]
+            if (ex.getWriteType().equals(WriteType.BATCH_LOG)) {
+              //Couldn't commit batch so we can retry
+              retryCassandraWrite(n - 1)(action)
+            } else if (ex.getWriteType().equals(WriteType.BATCH)) {
+              //This means it made it to the batch log so that they will get replayed eventually.
+              null.asInstanceOf[T]
+            } else throw new RuntimeException("Unexpected write type: " + ex.getWriteType())
+        } else throw e
+      }
 
   /**
    * If the job fails and restarts at something other than the highest offset,
@@ -118,8 +181,9 @@ object MovingAverage extends Scaffolding {
    *
    */
   def main(args: Array[String]): Unit = {
-    if (args.length != 7) {
-      System.err.println(s"Found: $args with length ${args.length} Expected: <clientId> <topic> <numOfPartitions> <zookeper> <broker> <streamingInterval> <windowSize>")
+    if (args.length != 9) {
+      System.err.println(s"Found: $args with length ${args.length} Expected: <clientId> <topic> <numOfPartitions> <zookeper> <broker> " +
+        s"<streamingInterval> <windowSize> <graphiteHost> <graphitePort>")
       System.exit(-1)
     } else {
       val clientId = args(0)
@@ -131,7 +195,10 @@ object MovingAverage extends Scaffolding {
       val windowSize = args(6).toInt
       val parallelism = args(2).toInt
 
-      val conf = new SparkConf().setAppName(sourceName)
+      val graphiteHost = args(7)
+      val graphitePort = args(8).toInt
+
+      val conf = new SparkConf().setAppName(maTable)
         .set("spark.cleaner.ttl", "3600")
         .set("spark.default.parallelism", parallelism.toString)
         .set("spark.streaming.backpressure.enabled", "true")
@@ -140,54 +207,18 @@ object MovingAverage extends Scaffolding {
         .set("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
 
       println(conf.toDebugString)
-      println(s"Client: $clientId - Topic: $topic - NumOfPartitions:$numOfPartitions - Zookeper: $zookeper - Broker: $kafkaBroker")
+      println(s"Client: $clientId - Topic: $topic - NumOfPartitions:$numOfPartitions - Zookeper: $zookeper - Broker: $kafkaBroker - Graphite:${graphiteHost}:${graphitePort}")
 
       val cc = new CassandraConnector(CassandraConnectorConf(conf))
 
       cc.withSessionDo { session =>
-        session.execute(
-          s"""
-            |CREATE KEYSPACE IF NOT EXISTS $keySpace WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 2 };
-          """.stripMargin)
+        session.execute(s"""
+           |CREATE KEYSPACE IF NOT EXISTS $keySpace WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 2 };
+        """.stripMargin)
 
-        /**
-         *
-                                    +--------------------------+------------------+--------------------------+-----------------
-                                    |2016-01-01:01:01:26:source|..-01:01:01:26:...|2016-01-01:01:01:29:source|..-01:01:01:29:..
-            +-----------------------+--------------------------+------------------+--------------------------+-----------------
-            |324234-34523:2016-01-01|                          |                  |                          |
-            +-----------------------+--------------------------+------------------+--------------------------+-----------------
+        session execute createMaTable
 
-
-                       +------+------+------+--
-                       |offset|offset|offset|
-            +----------+------+------+------+--
-            |readings:1| 135  | 245  |  442 |
-            +----------+------+------+------+--
-
-                       +------+------+------+--
-                       |offset|offset|offset|
-            +----------+------+------+------+--
-            |readings:2| 132  | 275  |  472 |
-            +----------+------+------+------+--
-
-        */
-        session.execute(
-          s"""CREATE TABLE IF NOT EXISTS ${keySpace}.${maTable} (
-              | device_id varchar,
-              | time_bucket varchar,
-              | source varchar,
-              | when timestamp,
-              | startOffset bigint,
-              | value double,
-              | PRIMARY KEY ((device_id, time_bucket), when)) WITH CLUSTERING ORDER BY (when DESC);""".stripMargin)
-
-        session.execute(
-          s"""CREATE TABLE IF NOT EXISTS ${keySpace}.${offsetsTable} (
-              | topic varchar,
-              | partition int,
-              | static offset bigint,
-              | PRIMARY KEY ((topic, partition)));""".stripMargin)
+        session execute createOffsetsTable
 
         (0 until numOfPartitions).foreach { n =>
           session.execute(s"INSERT INTO ${keySpace}.${offsetsTable}(topic, partition, offset) values(?,?,?) IF NOT EXISTS;",
@@ -195,17 +226,18 @@ object MovingAverage extends Scaffolding {
         }
       }
 
-      val offsets =
-        (0 until numOfPartitions).foldLeft(Map[TopicAndPartition, Long]()) { (acc, i) =>
-          val offset = Option(
-            cc.withSessionDo { session =>
-              session.execute(s"SELECT offset FROM ${keySpace}.${offsetsTable} where topic = ? and partition = ?", topic, i: java.lang.Integer)
-            }.one()).map(_.getLong("offset")).getOrElse(0l)
-          acc + (TopicAndPartition(topic, i) -> offset)
-        }
+      val offsets = (0 until numOfPartitions).foldLeft(Map[TopicAndPartition, Long]()) { (acc, i) =>
+        val offset = Option(
+          cc.withSessionDo { session =>
+            session.execute(s"SELECT offset FROM ${keySpace}.${offsetsTable} where topic = ? and partition = ?", topic, i: java.lang.Integer)
+          }.one).map(_.getLong("offset")).getOrElse(0l)
+        acc + (TopicAndPartition(topic, i) -> offset)
+      }
 
-      val ctx = setupSsc(conf, clientId, topic, numOfPartitions, zookeper, kafkaBroker, streamingIntervalSec, windowSize, cc, offsets)
-      ctx.start()
+
+      val ctx = setupSsc(conf, clientId, topic, numOfPartitions, zookeper, kafkaBroker, streamingIntervalSec,
+        windowSize, graphiteHost, graphitePort, cc, offsets)
+      ctx.start
       ctx.awaitTermination
     }
   }
