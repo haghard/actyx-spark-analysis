@@ -115,7 +115,7 @@ object MovingAverage extends Scaffolding {
 
         cc.withSessionDo { s =>
           //def graphiteReporter(metricRegistry: MetricRegistry, pId: Int, host: InetAddress): Unit /*GraphiteReporter*/ = {
-          val graphite = new Graphite(new InetSocketAddress("192.168.0.182", 8125))
+          val graphite = new Graphite(new InetSocketAddress(graphiteHost, graphitePort))
           val reporter = GraphiteReporter.forRegistry(s.getCluster.getMetrics.getRegistry)
             .prefixedWith(s"moving-avg-$pId")
             .convertRatesTo(TimeUnit.SECONDS)
