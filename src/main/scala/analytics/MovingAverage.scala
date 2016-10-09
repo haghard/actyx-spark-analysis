@@ -157,7 +157,7 @@ object MovingAverage extends Scaffolding {
 
   def executeWithRetry[T](n: Int)(f: ⇒ T) = retryCassandraWrite(n)(f)
 
-    @tailrec private def retryCassandraWrite[T](n: Int)(action: ⇒ T): T =
+    @tailrec def retryCassandraWrite[T](n: Int)(action: ⇒ T): T =
       Try(action) match {
         case Success(x) ⇒ x
         case Failure(e) ⇒
