@@ -1,7 +1,10 @@
 package analytics
 
 import java.net.{InetAddress, InetSocketAddress}
+import java.util.concurrent.TimeUnit
 
+import com.codahale.metrics.{MetricFilter, MetricRegistry}
+import com.codahale.metrics.graphite.{Graphite, GraphiteReporter}
 import com.datastax.driver.core.BatchStatement.Type
 
 import scala.annotation.tailrec
@@ -23,34 +26,22 @@ import spray.json._
 
 /**
 
-  scp target/scala-2.11/moving-average.jar haghard@192.168.0.182:/home/haghard/Projects
+ * scp target/scala-2.11/moving-average.jar haghard@192.168.0.182:/home/haghard/Projects
 
- bin/spark-submit --packages org.apache.spark:spark-streaming-kafka_2.11:1.6.1,datastax:spark-cassandra-connector:1.6.0-s_2.11 \
-  --master spark://192.168.0.182:7077 \
-  --conf spark.cassandra.connection.host=192.168.0.182,192.168.0.38 \
-  --conf spark.cassandra.output.consistency.level=LOCAL_QUORUM \
-  --total-executor-cores 4 \
-  --executor-memory 1024MB \
-  --class analytics.MovingAverage \
-  ../moving-average.jar \
-  client1 readings 4 192.168.0.148:2181 192.168.0.148:9092 35 4 192.168.0.182 8125
+ * bin/spark-submit --packages org.apache.spark:spark-streaming-kafka_2.11:1.6.1,datastax:spark-cassandra-connector:1.6.0-s_2.11 \
+ * --master spark://192.168.0.182:7077 \
+ * --conf spark.cassandra.connection.host=192.168.0.182,192.168.0.38 \
+ * --conf spark.cassandra.output.consistency.level=LOCAL_QUORUM \
+ * --total-executor-cores 4 \
+ * --executor-memory 1024MB \
+ * --class analytics.MovingAverage \
+ * ../moving-average.jar \
+ * client1 readings 4 192.168.0.148:2181 192.168.0.148:9092 35 4 192.168.0.182 8125
 
  */
 object MovingAverage extends Scaffolding {
 
   case class CommitFailed(msg: String, cause: WriteTimeoutException) extends Exception(msg)
-
-  /*def graphiteReporter(metricRegistry: MetricRegistry, pId: Int, host: InetAddress): Unit /*GraphiteReporter*/ = {
-    //val addr = new InetSocketAddress(InetAddress.getByName("192.168.0.182"), 8125)
-    val graphite = new Graphite(new InetSocketAddress("192.168.0.182", 2003))
-      val reporter = GraphiteReporter.forRegistry(metricRegistry)
-        .prefixedWith(s"moving-avg-$pId")
-        .convertRatesTo(TimeUnit.SECONDS)
-        .convertDurationsTo(TimeUnit.MILLISECONDS)
-        .filter(MetricFilter.ALL)
-        .build(graphite)
-      reporter.start(20, TimeUnit.SECONDS)
-  }*/
 
   def setupSsc(conf: SparkConf, clientId: String, topic: String, kafkaNumPartitions: Int, zookeper: String, broker: String,
     streamingIntervalSec: Int, windowSize: Int, graphiteHost: String, graphitePort: Int, /*g: GraphiteUDP,*/
@@ -102,10 +93,9 @@ object MovingAverage extends Scaffolding {
       println(s"Number of spark partitions after windowing: ${rdd.partitions.size}")
       rdd.foreachPartition { iter =>
         //Runs on a worker
-
-        val graphite = new GraphiteUDP {
+        /*val graphite = new GraphiteUDP {
           override val address = new InetSocketAddress(InetAddress.getByName(graphiteHost), graphitePort)
-        }
+        }*/
 
         val pId = TaskContext.get.partitionId
         //println("read offset ranges on the executor\n" + offsetRanges.mkString("\n"))
@@ -122,6 +112,21 @@ object MovingAverage extends Scaffolding {
         val stmt = new BatchStatement(Type.LOGGED)
         stmt.setConsistencyLevel(ConsistencyLevel.LOCAL_QUORUM)
         stmt.setSerialConsistencyLevel(ConsistencyLevel.LOCAL_SERIAL)
+
+        cc.withSessionDo { s =>
+          //def graphiteReporter(metricRegistry: MetricRegistry, pId: Int, host: InetAddress): Unit /*GraphiteReporter*/ = {
+          val graphite = new Graphite(new InetSocketAddress("192.168.0.182", 8125))
+          val reporter = GraphiteReporter.forRegistry(s.getCluster.getMetrics.getRegistry)
+            .prefixedWith(s"moving-avg-$pId")
+            .convertRatesTo(TimeUnit.SECONDS)
+            .convertDurationsTo(TimeUnit.MILLISECONDS)
+            .filter(MetricFilter.ALL)
+            .build(graphite)
+          reporter.start(20, TimeUnit.SECONDS)
+          //}
+
+          //graphiteReporter(s.getCluster.getMetrics.getRegistry, pId, host)
+        }
 
         cc.withSessionDo { s =>
           val now = ZonedDateTime.now(ZoneOffset.UTC)
@@ -145,7 +150,7 @@ object MovingAverage extends Scaffolding {
 
           executeWithRetry(5) {
             s.execute(batch)
-            buffer.foreach(graphite.send(_))
+            //buffer.foreach(graphite.send(_))
           }
         }
       }
