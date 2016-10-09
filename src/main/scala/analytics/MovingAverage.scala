@@ -7,8 +7,6 @@ import com.datastax.driver.core.BatchStatement.Type
 import scala.annotation.tailrec
 import scala.util.{Failure, Success, Try}
 
-//import com.codahale.metrics.{MetricRegistry, MetricFilter}
-//import com.codahale.metrics.graphite.{Graphite, GraphiteReporter}
 import java.time.{ZoneOffset, ZonedDateTime}
 
 import com.datastax.driver.core.exceptions.WriteTimeoutException
